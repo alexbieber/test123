@@ -1,0 +1,149 @@
+import torch
+import cv2
+import pyttsx3
+from deepface import DeepFace
+import speech_recognition as sr
+import wikipedia
+import os
+from datetime import datetime
+
+# Load YOLOv5 model
+model = torch.hub.load('ultralytics/yolov5', 'yolov5s', pretrained=True)
+
+# Initialize text-to-speech engine
+engine = pyttsx3.init()
+
+# Set properties for a human-like female voice
+voices = engine.getProperty('voices')
+engine.setProperty('voice', voices[1].id)  # Typically index 1 is a good female voice (varies by system)
+
+# Initialize speech recognizer
+recognizer = sr.Recognizer()
+
+# Create a directory to save conversations if it doesn't exist
+if not os.path.exists('conversations'):
+    os.makedirs('conversations')
+
+def speak(text):
+    print(f"Meera: {text}")
+    engine.say(text)
+    engine.runAndWait()
+
+def listen():
+    with sr.Microphone() as source:
+        recognizer.adjust_for_ambient_noise(source, duration=1)
+        print("Listening...")
+        try:
+            audio = recognizer.listen(source, timeout=5)
+            print("Audio captured, processing...")
+            command = recognizer.recognize_google(audio).lower()
+            print(f"User: {command}")
+            return command
+        except sr.WaitTimeoutError:
+            print("Listening timed out while waiting for command")
+            return None
+        except sr.UnknownValueError:
+            print("Could not understand audio")
+            return None
+        except sr.RequestError as e:
+            print(f"Could not request results from Google Speech Recognition service; {e}")
+            return None
+
+
+def save_conversation(command, response):
+    timestamp = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
+    filename = f"conversations/conversation_{timestamp}.txt"
+    with open(filename, 'a') as file:
+        file.write(f"User: {command}\nMeera: {response}\n\n")
+
+def meera_introduction():
+    description = (
+        "Hello! I'm Meera, your personal AI assistant. I'm here to help you with information! "
+        "and provide real-time object detection."
+    )
+    speak(description)
+    print(description)
+
+def get_wikipedia_summary(query, sentences=2):
+    try:
+        summary = wikipedia.summary(query, sentences=sentences)
+        # Limit the response to 40 words
+        return ' '.join(summary.split()[:40])
+    except wikipedia.exceptions.DisambiguationError as e:
+        return "There are multiple results for this query. Please be more specific."
+    except wikipedia.exceptions.PageError:
+        return "No page matches the query."
+    except Exception as e:
+        return f"An error occurred: {e}"
+
+def run_meera():
+    meera_introduction()
+    while True:
+        command = listen()
+        if command:
+            if "bye" in command:
+                speak("Goodbye!")
+                save_conversation(command, "Goodbye!")
+                break
+            elif "start detection" in command:
+                speak("Starting object detection... Watch out, I'm about to get to work!")
+                run_inference_on_camera()
+            elif "how are you" in command or "how r u" in command:
+                speak("I am good as always....How are you?")
+            elif "i am good" in command:
+                speak("Glaaad To know....! What's in your mind today? aap kya karna chahoge?")
+
+            else:
+                answer = get_wikipedia_summary(command)
+                speak(answer)
+                save_conversation(command, answer)
+
+def run_inference_on_camera():
+    cap = cv2.VideoCapture(0)  # Open the default camera
+
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            break
+        
+        # Perform inference
+        results = model(frame)
+        detections = results.xyxy[0]  # get detections
+
+        # Give voice feedback
+        for *box, conf, cls in detections:
+            label = model.names[int(cls)]
+            if label == "person":
+                x1, y1, x2, y2 = map(int, box)
+                face = frame[y1:y2, x1:x2]
+                emotion_description = detect_emotion(face)
+                message = f"Detected a person {emotion_description} with confidence {conf:.2%}. Better watch out!"
+            else:
+                message = f"Detected {label} with confidence {conf:.2%}. Who knew I could see that?"
+            speak(message)
+
+        # Display the results
+        cv2.imshow('YOLOv5 Live Detection', results.render()[0])
+
+        if cv2.waitKey(1) & 0xFF == ord('q'):
+            break
+
+        # Listen for stop command
+        stop_command = listen()
+        if stop_command and "stop" in stop_command:
+            speak("Alright, stopping the detection. Back to being quiet!")
+            break
+
+    cap.release()
+    cv2.destroyAllWindows()
+
+def detect_emotion(face):
+    try:
+        analysis = DeepFace.analyze(face, actions=['emotion'], enforce_detection=False)
+        emotion = analysis['dominant_emotion']
+        return f"showing {emotion}"
+    except Exception:
+        return "with undetectable emotion"
+
+if __name__ == "__main__":
+    run_meera()
