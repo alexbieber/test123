@@ -1,0 +1,96 @@
+# sweety_ai_main.py
+
+import cv2
+import torch
+import time
+import numpy as np
+import pyttsx3
+from datetime import datetime
+from ultralytics import YOLO
+
+# Initialize speech engine
+engine = pyttsx3.init()
+engine.setProperty('rate', 160)
+
+def speak(text):
+    print("Sweety:", text)
+    engine.say(text)
+    engine.runAndWait()
+
+# Load YOLOv5 model
+model = YOLO('yolov5s.pt')
+
+# Load Haar Cascade for hand detection
+hand_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'aGest.xml')
+
+# Dummy function to simulate object description
+def describe_image(frame):
+    speak("Analyzing the image now.")
+    results = model(frame)
+    labels = results[0].names
+    boxes = results[0].boxes
+    for i, box in enumerate(boxes):
+        cls = int(box.cls[0])
+        speak(f"I can see a {labels[cls]}")
+
+# Finger counting logic using convex hulls
+def count_fingers(frame):
+    roi = frame[100:300, 100:300]
+    gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+    blur = cv2.GaussianBlur(gray, (35, 35), 0)
+    _, thresh = cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    contours, _ = cv2.findContours(thresh, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+    if contours:
+        contour = max(contours, key=lambda x: cv2.contourArea(x))
+        hull = cv2.convexHull(contour, returnPoints=False)
+        if len(hull) > 3:
+            defects = cv2.convexityDefects(contour, hull)
+            if defects is not None:
+                finger_count = 0
+                for i in range(defects.shape[0]):
+                    s, e, f, d = defects[i, 0]
+                    start = tuple(contour[s][0])
+                    end = tuple(contour[e][0])
+                    far = tuple(contour[f][0])
+                    a = np.linalg.norm(np.array(start) - np.array(end))
+                    b = np.linalg.norm(np.array(far) - np.array(start))
+                    c = np.linalg.norm(np.array(far) - np.array(end))
+                    angle = np.arccos((b**2 + c**2 - a**2)/(2*b*c))
+                    if angle <= np.pi/2:
+                        finger_count += 1
+                return finger_count + 1
+    return 0
+
+# Main logic
+cap = cv2.VideoCapture(0)
+
+photo_taken = False
+start_description = False
+
+speak("Sweety is now running!")
+
+while True:
+    ret, frame = cap.read()
+    if not ret:
+        break
+
+    # Draw ROI
+    cv2.rectangle(frame, (100, 100), (300, 300), (0, 255, 0), 2)
+
+    fingers = count_fingers(frame)
+    if fingers == 1 and not photo_taken:
+        speak("One finger detected. Taking photo and starting description.")
+        cv2.imwrite("captured.jpg", frame)
+        describe_image(frame)
+        photo_taken = True
+
+    elif fingers == 5:
+        speak("Five fingers detected. Stopping detection.")
+        photo_taken = False
+
+    cv2.imshow('Sweety Vision', frame)
+    if cv2.waitKey(1) & 0xFF == ord('q'):
+        break
+
+cap.release()
+cv2.destroyAllWindows()
